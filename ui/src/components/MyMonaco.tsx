@@ -8,6 +8,7 @@ import { RepoContext } from "../lib/store";
 import { MonacoBinding } from "y-monaco";
 import { useReactFlow } from "reactflow";
 import { Annotation } from "../lib/parser";
+import { MonacoCompletionProvider } from "../lib/monacoCompletionProvider";
 
 const theme: monaco.editor.IStandaloneThemeData = {
   base: "vs",
@@ -26,6 +27,9 @@ monaco.languages.setLanguageConfiguration("julia", {
     decreaseIndentPattern: /^\s*(end|else|elseif|catch|finally)\b.*$/,
   },
 });
+
+console.log("monaco", monaco);
+console.log("languages", monaco.languages.registerInlineCompletionsProvider);
 function construct_indent(pos, indent) {
   return [
     {
@@ -390,7 +394,6 @@ export const MyMonaco = memo<MyMonacoProps>(function MyMonaco({
   const readOnly = useStore(store, (state) => state.role === "GUEST");
   const showLineNumbers = useStore(store, (state) => state.showLineNumbers);
   const getPod = useStore(store, (state) => state.getPod);
-  const setCurrentEditor = useStore(store, (state) => state.setCurrentEditor);
   const setPodContent = useStore(store, (state) => state.setPodContent);
   const initPodContent = useStore(store, (state) => state.initPodContent);
   const clearResults = useStore(store, (s) => s.clearResults);
@@ -408,14 +411,6 @@ export const MyMonaco = memo<MyMonacoProps>(function MyMonaco({
   const onChange = (value) => setPodContent({ id, content: value });
   let [editor, setEditor] =
     useState<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const onRun = useCallback(() => {
-    // it's MonacoEditor's bug microsoft/monaco-editor#2947, it always triggered the last created instance
-    const activeId = store.getState().currentEditor;
-    if (activeId) {
-      clearResults(activeId);
-      wsRun(activeId);
-    }
-  }, [clearResults, store, wsRun]);
 
   useEffect(() => {
     if (!editor) return;
@@ -466,12 +461,19 @@ export const MyMonaco = memo<MyMonacoProps>(function MyMonaco({
     editor.onDidFocusEditorText(() => {
       setPodFocus(id);
       if (resetSelection()) updateView();
-      setCurrentEditor(id);
     });
     editor.onDidContentSizeChange(updateHeight);
-    // FIXME clean up?
-    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, function () {
-      onRun();
+    // Note: must use addAction instead of addCommand. The addCommand is not
+    // working because it is bound to only the latest Monaco instance. This is a
+    // known bug: https://github.com/microsoft/monaco-editor/issues/2947
+    editor.addAction({
+      id: "Run",
+      label: "Run",
+      keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+      run: () => {
+        clearResults(id);
+        wsRun(id);
+      },
     });
     // editor.onDidChangeModelContent(async (e) => {
     //   // content is value?
@@ -479,6 +481,7 @@ export const MyMonaco = memo<MyMonacoProps>(function MyMonaco({
     // });
 
     // bind it to the ytext with pod id
+    // if (monaco.languages.registerInlineCompletionsProvider)
     const ytext = ydoc.getText("monaco-" + id);
     const monacoBinding = new MonacoBinding(
       ytext,

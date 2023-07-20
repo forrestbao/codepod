@@ -10,11 +10,16 @@ export interface SettingSlice {
   setDevMode: (b: boolean) => void;
   autoRunLayout?: boolean;
   setAutoRunLayout: (b: boolean) => void;
-
   contextualZoomParams: Record<any, number>;
   contextualZoom: boolean;
   setContextualZoom: (b: boolean) => void;
   level2fontsize: (level: number) => number;
+  showLineNumbers?: boolean;
+  setShowLineNumbers: (b: boolean) => void;
+  autoCompletion?: boolean;
+  setAutoCompletion: (b: boolean) => void;
+  isCustomToken?: boolean;
+  setIsCustomToken: (b: boolean) => void;
 }
 
 export const createSettingSlice: StateCreator<MyState, [], [], SettingSlice> = (
@@ -65,6 +70,15 @@ export const createSettingSlice: StateCreator<MyState, [], [], SettingSlice> = (
     // also write to local storage
     localStorage.setItem("contextualZoom", JSON.stringify(b));
   },
+  showLineNumbers: localStorage.getItem("showLineNumbers")
+    ? JSON.parse(localStorage.getItem("showLineNumbers")!)
+    : false,
+  setShowLineNumbers: (b: boolean) => {
+    // set it
+    set({ showLineNumbers: b });
+    // also write to local storage
+    localStorage.setItem("showLineNumbers", JSON.stringify(b));
+  },
   // TODO Make it configurable.
   contextualZoomParams: {
     prev: 56,
@@ -93,5 +107,23 @@ export const createSettingSlice: StateCreator<MyState, [], [], SettingSlice> = (
       default:
         return get().contextualZoomParams.next;
     }
+  },
+  autoCompletion: localStorage.getItem("autoCompletion")
+    ? JSON.parse(localStorage.getItem("autoCompletion")!)
+    : false,
+  setAutoCompletion: (b: boolean) => {
+    // set it
+    set({ autoCompletion: b });
+    // also write to local storage
+    localStorage.setItem("autoCompletion", JSON.stringify(b));
+  },
+  isCustomToken: localStorage.getItem("isCustomToken")
+    ? JSON.parse(localStorage.getItem("isCustomToken")!)
+    : false,
+  setIsCustomToken: (b: boolean) => {
+    // set it
+    set({ isCustomToken: b });
+    // also write to local storage
+    localStorage.setItem("isCustomToken", JSON.stringify(b));
   },
 });

@@ -10,9 +10,9 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import Drawer from "@mui/material/Drawer";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import Grid from "@mui/material/Grid";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
 import Typography from "@mui/material/Typography";
 import { useSnackbar, VariantType } from "notistack";
 
@@ -27,7 +27,11 @@ import { RepoContext } from "../lib/store";
 import useMe from "../lib/me";
 import { FormControlLabel, FormGroup, Stack, Switch } from "@mui/material";
 import { getUpTime } from "../lib/utils";
+import { registerCompletion } from "../lib/monacoCompletionProvider";
+import { SettingDialog } from "./SettingDialog";
 import { toSvg } from "html-to-image";
+
+const defaultAPIKey = process.env.REACT_APP_CODEIUM_API_KEY;
 
 function Flex(props) {
   return (
@@ -49,14 +53,59 @@ function SidebarSettings() {
   );
   const devMode = useStore(store, (state) => state.devMode);
   const setDevMode = useStore(store, (state) => state.setDevMode);
+  const showLineNumbers = useStore(store, (state) => state.showLineNumbers);
+  const setShowLineNumbers = useStore(
+    store,
+    (state) => state.setShowLineNumbers
+  );
+  const isGuest = useStore(store, (state) => state.role === "GUEST");
   const autoRunLayout = useStore(store, (state) => state.autoRunLayout);
   const setAutoRunLayout = useStore(store, (state) => state.setAutoRunLayout);
   const contextualZoom = useStore(store, (state) => state.contextualZoom);
   const setContextualZoom = useStore(store, (state) => state.setContextualZoom);
+  const autoCompletion = useStore(
+    store,
+    (state) => !isGuest && state.autoCompletion
+  );
+
+  const setAutoCompletion = useStore(store, (state) => state.setAutoCompletion);
   const autoLayoutROOT = useStore(store, (state) => state.autoLayoutROOT);
+  const apiKey = useStore(store, (state) =>
+    state.isCustomToken
+      ? state.user.codeiumAPIKey ?? defaultAPIKey
+      : defaultAPIKey
+  );
+  const setSettingOpen = useStore(store, (state) => state.setSettingOpen);
+
+  useEffect(() => {
+    if (autoCompletion && apiKey) {
+      const dispose = registerCompletion(apiKey);
+      if (dispose !== null) {
+        return dispose;
+      }
+    }
+  }, [autoCompletion, apiKey]);
+
   return (
     <Box>
       <Box>
+        <Tooltip title={"Show Line Numbers"} disableInteractive>
+          <FormGroup>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={showLineNumbers}
+                  size="small"
+                  color="warning"
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+                    setShowLineNumbers(event.target.checked);
+                  }}
+                />
+              }
+              label="Show Line Numbers"
+            />
+          </FormGroup>
+        </Tooltip>
         <Tooltip
           title={"Enable Debug Mode, e.g., show pod IDs"}
           disableInteractive
@@ -131,6 +180,50 @@ function SidebarSettings() {
                 />
               }
               label="Scoped Variables"
+            />
+          </FormGroup>
+        </Tooltip>
+        <Tooltip title={"Auto Completion"} disableInteractive>
+          <FormGroup>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!(apiKey && autoCompletion)}
+                  size="small"
+                  color="warning"
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+                    if (apiKey) {
+                      setAutoCompletion(event.target.checked);
+                    } else {
+                      setSettingOpen(true);
+                    }
+                  }}
+                />
+              }
+              label={
+                <>
+                  Auto Completion
+                  <Tooltip
+                    title={"Help"}
+                    disableInteractive
+                    sx={{ display: "inline" }}
+                  >
+                    <Box>
+                      <IconButton
+                        size="small"
+                        sx={{ display: "inline" }}
+                        onClick={() => setSettingOpen(true)}
+                        disabled={isGuest}
+                      >
+                        <HelpOutlineOutlinedIcon
+                          sx={{ fontSize: 14 }}
+                        ></HelpOutlineOutlinedIcon>
+                      </IconButton>
+                    </Box>
+                  </Tooltip>
+                </>
+              }
+              disabled={isGuest}
             />
           </FormGroup>
         </Tooltip>
@@ -298,7 +391,11 @@ function SyncStatus() {
     let res: string[] = [];
     if (state.repoLoaded) {
       for (const id in state.pods) {
-        if (state.pods[id].dirty || state.pods[id].isSyncing) {
+        if (
+          state.pods[id].dirty ||
+          state.pods[id].dirtyPending ||
+          state.pods[id].isSyncing
+        ) {
           res.push(id);
         }
       }
@@ -508,6 +605,168 @@ function ExportJSON() {
   );
 }
 
+function ExportJupyterNB() {
+  const { id: repoId } = useParams();
+  const store = useContext(RepoContext);
+  if (!store) throw new Error("Missing BearContext.Provider in the tree");
+  const repoName = useStore(store, (state) => state.repoName);
+  const pods = useStore(store, (state) => state.pods);
+  const filename = `${
+    repoName || "Untitled"
+  }-${new Date().toISOString()}.ipynb`;
+  const [loading, setLoading] = useState(false);
+
+  const onClick = () => {
+    setLoading(true);
+
+    // Hard-code Jupyter cell format. Reference, https://nbformat.readthedocs.io/en/latest/format_description.html
+    let jupyterCellList: {
+      cell_type: string;
+      execution_count: number;
+      metadata: object;
+      source: string[];
+    }[] = [];
+
+    // Queue to sort the pods geographically
+    let q = new Array();
+    // adjacency list for podId -> parentId mapping
+    let adj = {};
+    q.push([pods["ROOT"], "0.0"]);
+    while (q.length > 0) {
+      let [curPod, curScore] = q.shift();
+
+      // sort the pods geographically(top-down, left-right)
+      let sortedChildren = curPod.children
+        .map((x) => x.id)
+        .sort((id1, id2) => {
+          let pod1 = pods[id1];
+          let pod2 = pods[id2];
+          if (pod1 && pod2) {
+            if (pod1.y === pod2.y) {
+              return pod1.x - pod2.x;
+            } else {
+              return pod1.y - pod2.y;
+            }
+          } else {
+            return 0;
+          }
+        });
+
+      for (let i = 0; i < sortedChildren.length; i++) {
+        let pod = pods[sortedChildren[i]];
+        let geoScore = curScore + `${i + 1}`;
+        adj[pod.id] = {
+          name: pod.name,
+          parentId: pod.parent,
+          geoScore: geoScore,
+        };
+
+        if (pod.type == "SCOPE") {
+          q.push([pod, geoScore.substring(0, 2) + "0" + geoScore.substring(2)]);
+        } else if (pod.type == "CODE") {
+          jupyterCellList.push({
+            cell_type: "code",
+            // hard-code execution_count
+            execution_count: 1,
+            // TODO: expand other Codepod related-metadata fields, or run a real-time search in database when importing.
+            metadata: { id: pod.id, geoScore: Number(geoScore) },
+            source: [pod.content || ""],
+          });
+        } else if (pod.type == "RICH") {
+          jupyterCellList.push({
+            cell_type: "markdown",
+            // hard-code execution_count
+            execution_count: 1,
+            // TODO: expand other Codepod related-metadata fields, or run a real-time search in database when importing.
+            metadata: { id: pod.id, geoScore: Number(geoScore) },
+            source: [pod.richContent || ""],
+          });
+        }
+      }
+    }
+
+    // sort the generated cells by their geoScore
+    jupyterCellList.sort((cell1, cell2) => {
+      if (
+        Number(cell1.metadata["geoScore"]) < Number(cell2.metadata["geoScore"])
+      ) {
+        return -1;
+      } else {
+        return 1;
+      }
+    });
+
+    // Append the scope structure as comment for each cell and format source
+    for (const cell of jupyterCellList) {
+      let scopes: string[] = [];
+      let parentId = adj[cell.metadata["id"]].parentId;
+
+      // iterative {parentId,name} retrieval
+      while (parentId && parentId != "ROOT") {
+        scopes.push(adj[parentId].name);
+        parentId = adj[parentId].parentId;
+      }
+
+      // Add scope structure as a block comment at the head of each cell
+      let scopeStructureAsComment =
+        scopes.length > 0
+          ? [
+              "'''\n",
+              `CodePod Scope structure: ${scopes.reverse().join("/")}\n`,
+              "'''\n",
+            ]
+          : [""];
+
+      const sourceArray = cell.source[0]
+        .split(/\r?\n/)
+        .map((line) => line + "\n");
+
+      cell.source = [...scopeStructureAsComment, ...sourceArray];
+    }
+
+    const fileContent = JSON.stringify({
+      // hard-code Jupyter Notebook top-level metadata
+      metadata: {
+        name: repoName,
+        kernelspec: {
+          name: "python3",
+          display_name: "Python 3",
+        },
+        language_info: { name: "python" },
+        Codepod_version: "v0.0.1",
+      },
+      nbformat: 4,
+      nbformat_minor: 0,
+      cells: jupyterCellList,
+    });
+
+    // Generate the download link on the fly
+    let element = document.createElement("a");
+    element.setAttribute(
+      "href",
+      "data:text/plain;charset=utf-8," + encodeURIComponent(fileContent)
+    );
+    element.setAttribute("download", filename);
+
+    element.style.display = "none";
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  };
+
+  return (
+    <Button
+      variant="outlined"
+      size="small"
+      color="secondary"
+      onClick={onClick}
+      disabled={false}
+    >
+      Jupyter Notebook
+    </Button>
+  );
+}
+
 function ExportSVG() {
   // The name should contain the name of the repo, the ID of the repo, and the current date
   const { id: repoId } = useParams();
@@ -564,6 +823,7 @@ function ExportButtons() {
     <Stack spacing={1}>
       <ExportFile />
       <ExportJSON />
+      <ExportJupyterNB />
       <ExportSVG />
     </Stack>
   );
@@ -580,6 +840,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const store = useContext(RepoContext);
   if (!store) throw new Error("Missing BearContext.Provider in the tree");
   const isGuest = useStore(store, (state) => state.role === "GUEST");
+  const settingOpen = useStore(store, (state) => state.settingOpen);
   return (
     <>
       <MyKBar />
@@ -652,6 +913,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </Stack>
         </Box>
       </Drawer>
+
+      {settingOpen && <SettingDialog open={settingOpen} />}
     </>
   );
 };

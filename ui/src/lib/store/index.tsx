@@ -19,7 +19,11 @@ export type Pod = {
   name?: string;
   type: "CODE" | "SCOPE" | "RICH";
   content?: string;
+  richContent?: string;
   dirty?: boolean;
+  // A temporary dirty status used during remote API syncing, so that new dirty
+  // status is not cleared by API returns.
+  dirtyPending?: boolean;
   isSyncing?: boolean;
   children: { id: string; type: string }[];
   parent: string;
